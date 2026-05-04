@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #000;
+    --fg: #fff;
+    --accent: rgba(255,255,255,0.85);
+    --dim: rgba(255,255,255,0.45);
+    --overlay-bg: rgba(0,0,0,0.55);
+    --font: 'Courier New', monospace;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    overflow: hidden;
+    cursor: none;
+  }
+
+  /* ── CANVAS / VIDEO ── */
+  #canvas-360 {
+    position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    display: none;
+  }
+  #video-el {
+    position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    background: #000;
+    display: none;
+  }
+
+  /* ── CURSOR PERSONALIZADO ── */
+  #cursor {
+    position: fixed;
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.8);
+    border-radius: 50%;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    transition: transform 0.05s, border-color 0.2s;
+    z-index: 9999;
+    mix-blend-mode: difference;
+  }
+  #cursor.active { transform: translate(-50%,-50%) scale(1.8); }
+
+  /* ── CROSSHAIR (modo 360) ── */
+  #crosshair {
+    position: fixed;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    width: 24px; height: 24px;
+    pointer-events: none;
+    display: none;
+    z-index: 100;
+  }
+  #crosshair::before, #crosshair::after {
+    content: '';
+    position: absolute;
+    background: rgba(255,255,255,0.7);
+  }
+  #crosshair::before { left: 50%; top: 0; width: 1px; height: 100%; transform: translateX(-50%); }
+  #crosshair::after  { top: 50%; left: 0; height: 1px; width: 100%; transform: translateY(-50%); }
+  #crosshair .dot {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%,-50%);
+    width: 3px; height: 3px;
+    border-radius: 50%;
+    background: white;
+  }
+
+  /* ── PANTALLA DE INTRO ── */
+  #screen-intro {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: #000;
+    z-index: 200;
+  }
+  #screen-intro h1 {
+    font-size: clamp(1.2rem, 4vw, 2.2rem);
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    color: var(--fg);
+    margin-bottom: 3rem;
+    opacity: 0;
+    animation: fadeUp 1.2s 0.4s forwards;
+  }
+  #screen-intro .paths {
+    display: flex; gap: 2rem;
+    opacity: 0;
+    animation: fadeUp 1s 1.2s forwards;
+  }
+  .path-btn {
+    padding: 0.9rem 2.8rem;
+    border: 1px solid rgba(255,255,255,0.5);
+    background: transparent;
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 1rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.25s, border-color 0.25s;
+  }
+  .path-btn:hover {
+    background: rgba(255,255,255,0.1);
+    border-color: white;
+  }
+
+  /* ── HUD DECISIÓN (modo J) ── */
+  #hud-j {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 150;
+    display: none;
+  }
+  .j-option {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    cursor: pointer;
+    display: flex; flex-direction: column;
+    align-items: center; gap: 0.5rem;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .j-option.visible { opacity: 1; }
+  .j-option .key-badge {
+    width: 42px; height: 42px;
+    border: 2px solid rgba(255,255,255,0.8);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1rem;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(4px);
+    transition: background 0.2s, transform 0.15s;
+  }
+  .j-option:hover .key-badge {
+    background: rgba(255,255,255,0.18);
+    transform: scale(1.12);
+  }
+  .j-option .key-label {
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+
+  /* ── INDICADOR DE CARGA ── */
+  #loader {
+    position: fixed; inset: 0;
+    background: #000;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 300;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  #loader.visible { opacity: 1; pointer-events: all; }
+  #loader .spinner {
+    width: 32px; height: 32px;
+    border: 2px solid rgba(255,255,255,0.15);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  /* ── FADE OVERLAY ── */
+  #fade {
+    position: fixed; inset: 0;
+    background: #000;
+    pointer-events: none;
+    z-index: 250;
+    opacity: 0;
+    transition: opacity 0.5s;
+  }
+  #fade.in  { opacity: 1; }
+  #fade.out { opacity: 0; }
+
+  /* ── INDICADOR DE PATH (dev info) ── */
+  #info {
+    position: fixed;
+    bottom: 1rem; left: 1rem;
+    font-size: 0.65rem;
+    color: rgba(255,255,255,0.25);
+    letter-spacing: 0.1em;
+    z-index: 100;
+    pointer-events: none;
+    display: none;
+  }
+
+  /* ── FIN ── */
+  #screen-end {
+    position: fixed; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    background: #000;
+    z-index: 200;
+  }
+  #screen-end p {
+    font-size: 1.1rem;
+    letter-spacing: 0.3em;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 2rem;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  #screen-end button {
+    padding: 0.7rem 2rem;
+    border: 1px solid rgba(255,255,255,0.4);
+    background: transparent;
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 0.85rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  #screen-end button:hover { background: rgba(255,255,255,0.08); }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50%       { opacity: 0.9; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Cursor -->
+<div id="cursor"></div>
+
+<!-- Intro: elegir camino -->
+<div id="screen-intro">
+  <h1>Presiona para comenzar</h1>
+  <div class="paths" id="path-buttons"></div>
+</div>
+
+<!-- Fin -->
+<div id="screen-end">
+  <p>Fin</p>
+  <button onclick="restartFromEnd()">Reiniciar</button>
+</div>
+
+<!-- Loader -->
+<div id="loader"><div class="spinner"></div></div>
+
+<!-- Fade -->
+<div id="fade"></div>
+
+<!-- Canvas 360° -->
+<canvas id="canvas-360"></canvas>
+
+<!-- Video 2D -->
+<video id="video-el" playsinline></video>
+
+<!-- Crosshair (modo 360) -->
+<div id="crosshair"><div class="dot"></div></div>
+
+<!-- HUD decisión J -->
+<div id="hud-j"></div>
+
+<!-- Info dev -->
+<div id="info" id="info"></div>
+
+<!-- Three.js -->
+<script src="/media/three.min.js"></script>
+
+<script>
+// ================================================================
+//  ESTADO GLOBAL
+// ================================================================
+const State = {
+  ws: null,
+  videoMap: {},
+  currentLetter: null,
+  currentPid: "0",
+  isJ: false,
+  yaw: 0, pitch: 0,
+  pointerLocked: false,
+  devInfo: false,
+};
+
+// ── Three.js ──
+let three = {
+  renderer: null, scene: null, camera: null,
+  sphere: null, texture: null, videoTex: null,
+  animId: null,
+};
+
+// ── DOM ──
+const $canvas    = document.getElementById('canvas-360');
+const $video     = document.getElementById('video-el');
+const $hudJ      = document.getElementById('hud-j');
+const $fade      = document.getElementById('fade');
+const $loader    = document.getElementById('loader');
+const $crosshair = document.getElementById('crosshair');
+const $info      = document.getElementById('info');
+const $intro     = document.getElementById('screen-intro');
+const $end       = document.getElementById('screen-end');
+const $cursor    = document.getElementById('cursor');
+
+// ================================================================
+//  CURSOR
+// ================================================================
+document.addEventListener('mousemove', e => {
+  $cursor.style.left = e.clientX + 'px';
+  $cursor.style.top  = e.clientY + 'px';
+});
+document.addEventListener('mousedown', () => $cursor.classList.add('active'));
+document.addEventListener('mouseup',   () => $cursor.classList.remove('active'));
+
+// ================================================================
+//  WEBSOCKET
+// ================================================================
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url   = `${proto}://${location.host}/ws`;
+  State.ws = new WebSocket(url);
+
+  State.ws.onopen = () => {
+    console.log('[WS] Conectado');
+    fetchVideoMap();
+  };
+  State.ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    console.log('[WS →]', msg);
+    handleServerMessage(msg);
+  };
+  State.ws.onerror = e => console.error('[WS] Error', e);
+  State.ws.onclose = () => {
+    console.warn('[WS] Cerrado, reconectando en 2s...');
+    setTimeout(connectWS, 2000);
+  };
+}
+
+function send(obj) {
+  console.log('[WS ←]', obj);
+  if (State.ws && State.ws.readyState === WebSocket.OPEN) {
+    State.ws.send(JSON.stringify(obj));
+  } else {
+    console.warn('[WS] No conectado, reintentando...');
+    setTimeout(() => send(obj), 500);
+  }
+}
+
+// ================================================================
+//  VIDEO MAP
+// ================================================================
+async function fetchVideoMap() {
+  const r = await fetch('/api/map');
+  State.videoMap = await r.json();
+  showIntro();
+}
+
+// ================================================================
+//  INTRO
+// ================================================================
+function showIntro() {
+  // Detectar paths únicos al inicio (num más bajo de cada pid)
+  const minNum = Math.min(...Object.values(State.videoMap).map(v => v.num));
+  const startPids = new Set(
+    Object.values(State.videoMap)
+      .filter(v => v.num === minNum && v.commas === 0 && v.letter !== 'I')
+      .map(v => v.pid)
+  );
+  // Si no hay nada en el num mínimo, tomar todos los pids
+  if (startPids.size === 0) {
+    Object.values(State.videoMap).forEach(v => startPids.add(v.pid));
+  }
+
+  const sorted = [...startPids].sort();
+  const $btns = document.getElementById('path-buttons');
+  $btns.innerHTML = '';
+
+  if (sorted.length <= 1) {
+    $btns.appendChild(makePathBtn(sorted[0] || '0', 'Comenzar'));
+  } else {
+    const labels = ['A', 'B', 'C', 'D'];
+    sorted.slice(0, 4).forEach((pid, i) => {
+      $btns.appendChild(makePathBtn(pid, labels[i] || pid));
+    });
+  }
+
+  $intro.style.display = 'flex';
+  hideLoader();
+}
+
+function makePathBtn(pid, label) {
+  const btn = document.createElement('button');
+  btn.className = 'path-btn';
+  btn.textContent = label;
+  btn.onclick = () => startPath(pid);
+  return btn;
+}
+
+function startPath(pid) {
+  $intro.style.display = 'none';
+  showLoader();
+  State.currentPid = pid;
+  // Pequeño delay para que el browser procese el ocultamiento de la intro
+  setTimeout(() => send({ action: 'start', pid }), 50);
+}
+
+function restartFromEnd() {
+  $end.style.display = 'none';
+  showIntro();
+}
+
+// ================================================================
+//  MENSAJE DEL SERVIDOR
+// ================================================================
+function handleServerMessage(msg) {
+  console.log('[MSG]', msg.type, msg);
+
+  hideLoader();
+
+  if (msg.type === 'load_video') {
+    doFade(() => loadVideo(msg));
+
+  } else if (msg.type === 'load_j') {
+    doFade(() => loadJ(msg));
+
+  } else if (msg.type === 'end') {
+    doFade(() => {
+      stop360();
+      stopVideo();
+      $end.style.display = 'flex';
+    });
+
+  } else if (msg.type === 'error') {
+    console.error('[Server error]', msg.msg);
+  }
+}
+
+// ================================================================
+//  FADE HELPER
+// ================================================================
+function doFade(fn) {
+  $fade.classList.add('in');
+  setTimeout(() => {
+    fn();
+    setTimeout(() => $fade.classList.remove('in'), 100);
+  }, 500);
+}
+
+// ================================================================
+//  VIDEO 2D
+// ================================================================
+function loadVideo(msg) {
+  stop360();
+  hideJ();
+
+  const url = `/media/${msg.file}`;
+  State.currentLetter = msg.letter;
+  State.currentPid    = msg.pid;
+  State.isJ = false;
+
+  $video.src = url;
+  $video.style.display = 'block';
+  $canvas.style.display = 'none';
+  $crosshair.style.display = 'none';
+  exitPointerLock();
+
+  $video.load();
+  $video.play().catch(e => console.warn('Autoplay bloqueado:', e));
+
+  $video.onended = () => {
+    send({ action: 'video_end' });
+    showLoader();
+  };
+
+  updateInfo(msg);
+}
+
+function stopVideo() {
+  $video.pause();
+  $video.src = '';
+  $video.style.display = 'none';
+  $video.onended = null;
+}
+
+// ================================================================
+//  MODO J — IMAGEN 360° CON DECISIONES
+// ================================================================
+function loadJ(msg) {
+  stopVideo();
+  State.isJ    = true;
+  State.currentPid = msg.pid;
+
+  // Inicializar Three.js si hace falta
+  if (!three.renderer) initThree();
+
+  const url = `/media/${msg.file}`;
+  loadSphereTexture(url, () => {
+    $canvas.style.display  = 'block';
+    $crosshair.style.display = 'block';
+    startRenderLoop();
+    requestPointerLock();
+    showJOptions(msg.key_map, msg.option_coords);
+    updateInfo(msg);
+  });
+}
+
+function showJOptions(keyMap, optionCoords) {
+  $hudJ.innerHTML = '';
+  $hudJ.style.display = 'block';
+
+  // Posiciones en pantalla según la tecla (distribuidas alrededor del centro)
+  const positions = {
+    W: { x: '50%', y: '22%' },
+    S: { x: '50%', y: '78%' },
+    A: { x: '18%', y: '50%' },
+    D: { x: '82%', y: '50%' },
+  };
+
+  Object.entries(keyMap).forEach(([key, pid]) => {
+    const pos = positions[key] || { x: '50%', y: '50%' };
+    const el  = document.createElement('div');
+    el.className = 'j-option';
+    el.style.left = pos.x;
+    el.style.top  = pos.y;
+    el.innerHTML  = `
+      <div class="key-badge">${key}</div>
+      <div class="key-label">${pid !== State.currentPid ? 'Camino ' + pid : 'Continuar'}</div>
+    `;
+    el.addEventListener('click', () => chooseJ(key));
+    $hudJ.appendChild(el);
+
+    // Animar entrada
+    setTimeout(() => el.classList.add('visible'), 50);
+  });
+}
+
+function hideJ() {
+  $hudJ.style.display = 'none';
+  $hudJ.innerHTML = '';
+  State.isJ = false;
+}
+
+function chooseJ(key) {
+  hideJ();
+  exitPointerLock();
+  stop360();
+  showLoader();
+  send({ action: 'j_choice', key });
+}
+
+// ================================================================
+//  THREE.JS — VISOR 360°
+// ================================================================
+function initThree() {
+  three.renderer = new THREE.WebGLRenderer({ canvas: $canvas, antialias: true });
+  three.renderer.setPixelRatio(window.devicePixelRatio);
+  three.renderer.setSize(window.innerWidth, window.innerHeight);
+
+  three.scene  = new THREE.Scene();
+  three.camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 100);
+
+  // Esfera interior
+  const geo  = new THREE.SphereGeometry(10, 64, 64);
+  // Invertir normales para ver desde adentro
+  geo.scale(-1, 1, 1);
+
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  three.sphere = new THREE.Mesh(geo, mat);
+  three.scene.add(three.sphere);
+
+  window.addEventListener('resize', () => {
+    three.renderer.setSize(window.innerWidth, window.innerHeight);
+    three.camera.aspect = window.innerWidth / window.innerHeight;
+    three.camera.updateProjectionMatrix();
+  });
+}
+
+function loadSphereTexture(url, onReady) {
+  if (three.texture) {
+    three.texture.dispose();
+    three.texture = null;
+  }
+  const loader = new THREE.TextureLoader();
+  loader.load(url, tex => {
+    three.texture = tex;
+    three.sphere.material.map = tex;
+    three.sphere.material.needsUpdate = true;
+    if (onReady) onReady();
+  }, undefined, e => console.error('Error cargando textura:', e));
+}
+
+function startRenderLoop() {
+  if (three.animId) return;
+  function loop() {
+    three.animId = requestAnimationFrame(loop);
+    // Cámara según yaw/pitch
+    const yawRad   = THREE.MathUtils.degToRad(State.yaw);
+    const pitchRad = THREE.MathUtils.degToRad(State.pitch);
+    three.camera.rotation.order = 'YXZ';
+    three.camera.rotation.y = -yawRad;
+    three.camera.rotation.x =  pitchRad;
+    three.renderer.render(three.scene, three.camera);
+  }
+  loop();
+}
+
+function stop360() {
+  if (three.animId) {
+    cancelAnimationFrame(three.animId);
+    three.animId = null;
+  }
+  $canvas.style.display  = 'none';
+  $crosshair.style.display = 'none';
+}
+
+// ================================================================
+//  POINTER LOCK (rotación con mouse en modo 360)
+// ================================================================
+function requestPointerLock() {
+  $canvas.requestPointerLock();
+}
+function exitPointerLock() {
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+
+document.addEventListener('pointerlockchange', () => {
+  State.pointerLocked = (document.pointerLockElement === $canvas);
+});
+
+document.addEventListener('mousemove', e => {
+  if (!State.pointerLocked) return;
+  const sens = 0.18;
+  State.yaw   += e.movementX * sens;
+  State.pitch -= e.movementY * sens;
+  State.pitch  = Math.max(-89, Math.min(89, State.pitch));
+});
+
+// Activar pointer lock al hacer click en el canvas
+$canvas.addEventListener('click', () => {
+  if (State.isJ && !State.pointerLocked) requestPointerLock();
+});
+
+// ================================================================
+//  TECLADO (reemplaza on_key_press de main.py)
+// ================================================================
+document.addEventListener('keydown', e => {
+  const k = e.key.toUpperCase();
+
+  // Modo J: W / A / S / D eligen camino
+  if (State.isJ) {
+    if (['W', 'A', 'S', 'D'].includes(k)) {
+      // Verificar que esa opción existe
+      const opts = [...$hudJ.querySelectorAll('.j-option')];
+      const matching = opts.find(el => el.querySelector('.key-badge').textContent === k);
+      if (matching) chooseJ(k);
+    }
+    return;
+  }
+
+  // ESC → salir del pointer lock
+  if (e.key === 'Escape') {
+    exitPointerLock();
+  }
+
+  // I → debug info
+  if (k === 'I') {
+    State.devInfo = !State.devInfo;
+    $info.style.display = State.devInfo ? 'block' : 'none';
+  }
+});
+
+// ================================================================
+//  LOADER / INFO
+// ================================================================
+function showLoader() {
+  $loader.classList.add('visible');
+}
+function hideLoader() {
+  $loader.classList.remove('visible');
+}
+function updateInfo(msg) {
+  $info.textContent = `num=${msg.num} pid=${msg.pid} letter=${msg.letter || 'J'} commas=${msg.commas ?? 0}`;
+}
+
+// ================================================================
+//  ARRANQUE
+// ================================================================
+connectWS();
+</script>
+</body>
+</html>
